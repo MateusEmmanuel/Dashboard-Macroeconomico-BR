@@ -5,7 +5,7 @@ Painel interativo em **Python + Streamlit** para acompanhar os principais indica
 👉 **[Ver o dashboard ao vivo](COLE-AQUI-O-LINK-DO-APP.streamlit.app)**
 
 <!-- Substitua pelo print do seu dashboard. Salve a imagem em imagens/dashboard.png -->
-![Visão geral do dashboard](imagens/dashboard.png)
+![Visão geral do dashboard](imagens)
 
 ## O que o dashboard mostra
 
