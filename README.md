@@ -2,7 +2,7 @@
 
 Painel interativo em **Python + Streamlit** para acompanhar os principais indicadores da economia brasileira, com dados coletados automaticamente das APIs oficiais do **Banco Central (SGS)** e do **IBGE (SIDRA)**.
 
-👉 **[Ver o dashboard ao vivo](COLE-AQUI-O-LINK-DO-APP.streamlit.app)**
+👉 **[Ver o dashboard ao vivo](https://dashboard-macroeconomico-br.streamlit.app/)**
 
 <!-- Substitua pelo print do seu dashboard. Salve a imagem em imagens/dashboard.png -->
 ![Visão geral do dashboard](imagens)
