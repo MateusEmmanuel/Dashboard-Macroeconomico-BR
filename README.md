@@ -11,7 +11,7 @@ Painel interativo em **Python + Streamlit** para acompanhar os principais indica
 
 | Aba | Indicadores | Fonte |
 |---|---|---|
-| Juros e câmbio | Selic meta, juro real ex-post (Selic vs. IPCA 12m), dólar comercial | BCB/SGS |
+| Juros e câmbio | Selic meta, juro real ex-post (Selic 12m vs. IPCA 12m), dólar comercial | BCB/SGS |
 | Inflação | IPCA acumulado em 12 meses (com a meta de 3% e a tolerância de ±1,5 p.p.) e IPCA mensal | IBGE/SIDRA |
 | Atividade e emprego | PIB (variação em volume vs. mesmo trimestre do ano anterior), PIB a preços correntes, taxa de desocupação (PNAD Contínua) | IBGE/SIDRA |
 
