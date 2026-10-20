@@ -33,7 +33,7 @@ Também há indicadores resumidos no topo (último valor e variação em relaç�
 - Os dados são consultados diretamente nas APIs, sempre até a data atual (sem datas fixas no código).
 - O resultado fica em cache por 6 horas (`st.cache_data`), e o botão **Atualizar dados agora** limpa o cache.
 - Os códigos de período trimestrais do IBGE (`AAAAQQ`) são convertidos para trimestres, e não para meses.
-- O juro real ex-post é uma aproximação: `(1 + Selic meta no fim do mês) / (1 + IPCA 12m) - 1`.
+- O juro real ex-post é uma aproximação: `(1 + Selic efetiva acumulada em 12 meses) / (1 + IPCA acumulado em 12 meses) - 1`.
 - Séries diárias do BCB são limitadas a 10 anos por consulta, por isso o seletor de histórico vai até 10 anos.
 
 ## Como rodar localmente
