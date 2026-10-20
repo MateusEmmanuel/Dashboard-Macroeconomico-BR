@@ -23,6 +23,7 @@ CACHE_TTL = 6 * 3600  # os dados são recarregados a cada 6 horas
 # Séries do Banco Central (SGS)
 SGS_SELIC_META = 432  # Taxa Selic - meta (% a.a.)
 SGS_DOLAR = 1  # Dólar comercial (venda) - R$/US$
+SGS_SELIC_MENSAL = 4390  # Selic efetiva acumulada no mês (% a.m.)
 
 # Tabelas do IBGE (SIDRA)
 SIDRA_IPCA = 1737  # IPCA - série histórica
@@ -116,12 +117,13 @@ def carregar(nome: str, funcao, *args, **kwargs) -> pd.DataFrame | None:
 # --------------------------------------------------------------------------- #
 # Transformações
 # --------------------------------------------------------------------------- #
-def juro_real_ex_post(selic: pd.DataFrame, ipca_12m: pd.DataFrame) -> pd.DataFrame:
-    """Juro real ex-post aproximado: Selic meta no fim de cada mês vs. IPCA em 12 meses."""
-    selic_mensal = selic.set_index("data")["valor"].resample("MS").last().dropna()
+def juro_real_ex_post(selic_mensal: pd.DataFrame, ipca_12m: pd.DataFrame) -> pd.DataFrame:
+    """Juro real ex-post: Selic efetiva acumulada em 12 meses vs. IPCA acumulado em 12 meses."""
+    fator_mensal = 1 + selic_mensal.set_index("data")["valor"] / 100
+    selic_12m = (fator_mensal.rolling(12).apply(lambda x: x.prod(), raw=True) - 1) * 100
     ipca = ipca_12m.set_index("período")["valor"]
-    base = pd.concat([selic_mensal.rename("selic"), ipca.rename("ipca_12m")], axis=1, join="inner")
-    base["juro_real"] = ((1 + base["selic"] / 100) / (1 + base["ipca_12m"] / 100) - 1) * 100
+    base = pd.concat([selic_12m.rename("selic_12m"), ipca.rename("ipca_12m")], axis=1, join="inner").dropna()
+    base["juro_real"] = ((1 + base["selic_12m"] / 100) / (1 + base["ipca_12m"] / 100) - 1) * 100
     base.index.name = "data"
     return base.reset_index()
 
@@ -176,7 +178,8 @@ with st.sidebar:
 # Coleta
 selic = carregar("Selic", dados_bacen, SGS_SELIC_META, anos)
 dolar = carregar("Dólar", dados_bacen, SGS_DOLAR, anos)
-ipca_12m = carregar("IPCA em 12 meses", dados_ibge, SIDRA_IPCA, SIDRA_IPCA_12M, anos * 12 + 12)
+selic_mensal = carregar("Selic efetiva (acumulada no mês)", dados_bacen, SGS_SELIC_MENSAL, anos + 1)
+ipca_12m = carregar("IPCA em 12 meses", dados_ibge, SIDRA_IPCA, SIDRA_IPCA_12M, anos * 12)
 ipca_mensal = carregar("IPCA mensal", dados_ibge, SIDRA_IPCA, SIDRA_IPCA_MENSAL, anos * 12)
 pib_var = carregar(
     "PIB (variação anual)",
@@ -217,21 +220,21 @@ with aba_monetaria:
             grafico_linha(selic, "data", "valor", "Taxa Selic - meta (% a.a.)", "% a.a."),
             width="stretch",
         )
-    if selic is not None and ipca_12m is not None:
-        juro = juro_real_ex_post(selic, ipca_12m)
+    if selic_mensal is not None and ipca_12m is not None:
+        juro = juro_real_ex_post(selic_mensal, ipca_12m)
         if not juro.empty:
             st.plotly_chart(
                 grafico_linha(
                     juro,
                     "data",
                     "juro_real",
-                    "Juro real ex-post (Selic meta vs. IPCA 12m, % a.a.)",
+                    "Juro real ex-post (Selic efetiva 12m vs. IPCA 12m, % a.a.)",
                     "% a.a.",
                 ),
                 width="stretch",
             )
             st.caption(
-                "Aproximação: (1 + Selic meta no fim do mês) / (1 + IPCA acumulado em 12 meses) - 1."
+                "Aproximação: (1 + Selic efetiva acumulada em 12 meses) / (1 + IPCA acumulado em 12 meses) - 1."
             )
     if dolar is not None:
         st.plotly_chart(
@@ -292,8 +295,8 @@ with aba_atividade:
             fig.update_xaxes(type="category")
             st.plotly_chart(fig, width="stretch")
             st.caption(
-                "Valores nominais crescem em boa parte com a inflação; "
-                "para analisar atividade, prefira a variação em volume acima."
+                "A frequência trimestral captura mudanças conjunturais e pontos de virada "
+                "na atividade com maior agilidade em relação aos dados anuais consolidados."    
             )
 
 with st.expander("Fontes e metodologia"):
@@ -301,6 +304,7 @@ with st.expander("Fontes e metodologia"):
         f"""
 - **Selic meta** - BCB/SGS, série {SGS_SELIC_META}
 - **Dólar comercial (venda)** - BCB/SGS, série {SGS_DOLAR}
+- **Selic efetiva acumulada no mês** (base do juro real) - BCB/SGS, série {SGS_SELIC_MENSAL}
 - **IPCA** - IBGE/SIDRA, tabela {SIDRA_IPCA} (variáveis {SIDRA_IPCA_MENSAL} e {SIDRA_IPCA_12M})
 - **PIB (variação em volume, trimestre / mesmo trimestre do ano anterior)** - IBGE/SIDRA,
   tabela {SIDRA_PIB_VAR}, variável {SIDRA_PIB_VAR_ANUAL}
