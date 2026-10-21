@@ -10,6 +10,7 @@ Como rodar:
 """
 
 from datetime import date, timedelta
+import time
 
 import pandas as pd
 import plotly.express as px
@@ -18,8 +19,9 @@ import streamlit as st
 
 st.set_page_config(page_title="Dashboard Macro BR", page_icon="📊", layout="wide")
 
-TIMEOUT = 30  # segundos
-CACHE_TTL = 6 * 3600  # os dados são recarregados a cada 6 horas
+TIMEOUT = 30  # segundos por tentativa
+TENTATIVAS_REQUISICAO = 3
+CACHE_TTL = 6 * 3600  # recarrega os dados a cada 6 horas
 
 # Séries do Banco Central (SGS)
 SGS_SELIC_META = 432  # Taxa Selic - meta (% a.a.)
@@ -43,6 +45,33 @@ TOLERANCIA = 1.5  # p.p.
 
 
 # --------------------------------------------------------------------------- #
+# Requisições HTTP com novas tentativas
+# --------------------------------------------------------------------------- #
+
+def requisicao_com_retry(url: str) -> requests.Response:
+    """Tenta novamente uma requisição quando ocorre uma falha temporária."""
+    ultimo_erro = None
+
+    for tentativa in range(TENTATIVAS_REQUISICAO):
+        try:
+            resposta = requests.get(url, timeout=TIMEOUT)
+            resposta.raise_for_status()
+            return resposta
+
+        except requests.exceptions.RequestException as erro:
+            ultimo_erro = erro
+
+            if tentativa < TENTATIVAS_REQUISICAO - 1:
+                # Espera 1 segundo e depois 2 segundos antes de tentar novamente.
+                time.sleep(2 ** tentativa)
+
+    if ultimo_erro is not None:
+        raise ultimo_erro
+
+    raise RuntimeError("Não foi possível realizar a requisição.")
+
+
+# --------------------------------------------------------------------------- #
 # Coleta de dados
 # --------------------------------------------------------------------------- #
 
@@ -52,12 +81,13 @@ def dados_bacen(codigo: int, anos: int) -> pd.DataFrame:
     """Baixa uma série do SGS/BCB para os últimos `anos`."""
     hoje = date.today()
     inicio = hoje - timedelta(days=365 * anos)
+
     url = (
         f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{codigo}/dados"
         f"?formato=json&dataInicial={inicio:%d/%m/%Y}&dataFinal={hoje:%d/%m/%Y}"
     )
-    resposta = requests.get(url, timeout=TIMEOUT)
-    resposta.raise_for_status()
+
+    resposta = requisicao_com_retry(url)
     tabela = pd.DataFrame(resposta.json())
 
     if tabela.empty:
@@ -65,7 +95,12 @@ def dados_bacen(codigo: int, anos: int) -> pd.DataFrame:
 
     tabela["data"] = pd.to_datetime(tabela["data"], dayfirst=True)
     tabela["valor"] = pd.to_numeric(tabela["valor"], errors="coerce")
-    return tabela.dropna(subset=["valor"]).reset_index(drop=True)
+    tabela = tabela.dropna(subset=["valor"]).reset_index(drop=True)
+
+    if tabela.empty:
+        raise ValueError(f"A série SGS {codigo} não possui valores válidos.")
+
+    return tabela
 
 
 # Dados IBGE
@@ -97,47 +132,96 @@ def dados_ibge(
     if classificacao:
         url += f"&classificacao={classificacao}"
 
-    resposta = requests.get(url, timeout=TIMEOUT)
-    resposta.raise_for_status()
-    serie = resposta.json()[0]["resultados"][0]["series"][0]["serie"]
+    resposta = requisicao_com_retry(url)
+    conteudo = resposta.json()
 
-    tabela_df = pd.DataFrame(list(serie.items()), columns=["codigo", "valor"])
+    try:
+        serie = conteudo[0]["resultados"][0]["series"][0]["serie"]
+    except (IndexError, KeyError, TypeError) as erro:
+        raise ValueError(
+            f"A API do IBGE não retornou a estrutura esperada "
+            f"para a tabela {tabela}, variável {variavel}."
+        ) from erro
+
+    tabela_df = pd.DataFrame(
+        list(serie.items()),
+        columns=["codigo", "valor"],
+    )
+
     tabela_df["valor"] = pd.to_numeric(tabela_df["valor"], errors="coerce")
     tabela_df = tabela_df.dropna(subset=["valor"]).copy()
+
+    if tabela_df.empty:
+        raise ValueError(
+            f"A tabela {tabela} do IBGE não retornou valores válidos."
+        )
+
     tabela_df["período"] = tabela_df["codigo"].map(
         lambda c: _codigo_para_data(c, trimestral)
     )
 
     if trimestral:
         tabela_df["rótulo"] = tabela_df["codigo"].map(
-            lambda c: f"{int(c[4:])}T{c[2:4]}"
+            lambda c: f"{int(c[4:])}T{c[:4]}"
         )
 
     return tabela_df.sort_values("período").reset_index(drop=True)
 
 
+# --------------------------------------------------------------------------- #
+# Carregamento com fallback para dados anteriores
+# --------------------------------------------------------------------------- #
+
 def carregar(nome: str, funcao, *args, **kwargs) -> pd.DataFrame | None:
-    """Executa uma coleta e mostra um erro amigável na tela se ela falhar."""
+    """Carrega dados e reaproveita a última versão válida da sessão se necessário."""
+    chave = f"_ultimo_valido_{nome}_{args}_{sorted(kwargs.items())}"
+
     try:
-        return funcao(*args, **kwargs)
-    except Exception as erro:  # noqa: BLE001
-        st.error(f"Não foi possível carregar **{nome}**: {erro}")
+        df = funcao(*args, **kwargs)
+
+        if df is not None and not df.empty:
+            st.session_state[chave] = df.copy()
+
+        return df
+
+    except Exception as erro:
+        # Os detalhes técnicos ficam nos logs do terminal, não na interface.
+        print(f"Falha ao carregar {nome}: {type(erro).__name__}: {erro}")
+
+        anterior = st.session_state.get(chave)
+
+        if anterior is not None and not anterior.empty:
+            st.warning(
+                f"⚠️ **{nome}:** não foi possível atualizar os dados. "
+                "Exibindo a última versão carregada nesta sessão, "
+                "que pode estar desatualizada."
+            )
+            return anterior.copy()
+
+        st.warning(
+            f"⚠️ **{nome}:** indicador temporariamente indisponível. "
+            "Não há dados anteriores salvos nesta sessão. "
+            "Tente novamente em alguns instantes."
+        )
         return None
 
 
 # --------------------------------------------------------------------------- #
 # Transformações
 # --------------------------------------------------------------------------- #
+
 def juro_real_ex_post(
     selic_mensal: pd.DataFrame, ipca_12m: pd.DataFrame
 ) -> pd.DataFrame:
     """Calcula o juro real ex-post a partir da Selic efetiva e do IPCA em 12 meses."""
     fator_mensal = 1 + selic_mensal.set_index("data")["valor"] / 100
+
     selic_12m = (
         fator_mensal.rolling(12).apply(lambda x: x.prod(), raw=True) - 1
     ) * 100
 
     ipca = ipca_12m.set_index("período")["valor"]
+
     base = pd.concat(
         [
             selic_12m.rename("selic_12m"),
@@ -148,7 +232,9 @@ def juro_real_ex_post(
     ).dropna()
 
     base["juro_real"] = (
-        (1 + base["selic_12m"] / 100) / (1 + base["ipca_12m"] / 100) - 1
+        (1 + base["selic_12m"] / 100)
+        / (1 + base["ipca_12m"] / 100)
+        - 1
     ) * 100
 
     base.index.name = "data"
@@ -158,6 +244,7 @@ def juro_real_ex_post(
 # --------------------------------------------------------------------------- #
 # Gráficos e indicadores
 # --------------------------------------------------------------------------- #
+
 def estilo(
     fig,
     titulo_y: str,
@@ -190,7 +277,6 @@ def estilo(
     if formato_x:
         fig.update_xaxes(hoverformat=formato_x)
 
-    # O tooltip usa o valor formatado e não mostra a caixa extra da série.
     fig.update_traces(
         hovertemplate=(
             f"<b>{prefixo}%{{y:{formato_valor}}}{sufixo}</b>"
@@ -213,15 +299,8 @@ def grafico_linha(
     formato_x="%d %b %Y",
 ):
     """Cria um gráfico de linha com tooltip padronizado."""
-    fig = px.line(
-        df,
-        x=x,
-        y=y,
-        title=titulo,
-    )
+    fig = px.line(df, x=x, y=y, title=titulo)
 
-    # Mantém as linhas sem marcadores permanentes. O hover unificado e o
-    # tooltip personalizado facilitam a identificação da observação.
     return estilo(
         fig,
         titulo_y,
@@ -260,7 +339,9 @@ def indicador(
 # --------------------------------------------------------------------------- #
 # Interface
 # --------------------------------------------------------------------------- #
+
 st.title("📊 Dashboard Macroeconômico do Brasil")
+
 st.caption(
     "Indicadores de atividade, inflação, política monetária, câmbio e mercado "
     "de trabalho, com dados do Banco Central (SGS) e do IBGE (SIDRA) "
@@ -275,14 +356,18 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-    st.caption(f"Consulta feita em {date.today():%d/%m/%Y}. Cache de 6 horas.")
+    st.caption(
+        f"Consulta feita em {date.today():%d/%m/%Y}. Cache de 6 horas."
+    )
 
 
 # --------------------------------------------------------------------------- #
 # Coleta
 # --------------------------------------------------------------------------- #
+
 selic = carregar("Selic", dados_bacen, SGS_SELIC_META, anos)
 dolar = carregar("Dólar", dados_bacen, SGS_DOLAR, anos)
+
 selic_mensal = carregar(
     "Selic efetiva (acumulada no mês)",
     dados_bacen,
@@ -337,6 +422,7 @@ desemprego = carregar(
 # --------------------------------------------------------------------------- #
 # Indicadores principais
 # --------------------------------------------------------------------------- #
+
 col1, col2, col3, col4, col5 = st.columns(5)
 
 indicador(
@@ -392,6 +478,7 @@ aba_monetaria, aba_inflacao, aba_atividade = st.tabs(
 # --------------------------------------------------------------------------- #
 # Aba: Juros e câmbio
 # --------------------------------------------------------------------------- #
+
 with aba_monetaria:
     if selic is not None:
         st.plotly_chart(
@@ -447,6 +534,7 @@ with aba_monetaria:
 # --------------------------------------------------------------------------- #
 # Aba: Inflação
 # --------------------------------------------------------------------------- #
+
 with aba_inflacao:
     if ipca_12m is not None:
         fig = grafico_linha(
@@ -499,6 +587,7 @@ with aba_inflacao:
 # --------------------------------------------------------------------------- #
 # Aba: Atividade e emprego
 # --------------------------------------------------------------------------- #
+
 with aba_atividade:
     if pib_var is not None:
         fig = estilo(
@@ -562,6 +651,7 @@ with aba_atividade:
 # --------------------------------------------------------------------------- #
 # Fontes e metodologia
 # --------------------------------------------------------------------------- #
+
 with st.expander("Fontes e metodologia"):
     st.markdown(
         f"""
@@ -576,5 +666,7 @@ with st.expander("Fontes e metodologia"):
   variável {SIDRA_DESEMPREGO_VAR}
 
 Os dados são consultados diretamente nas APIs oficiais e ficam em cache por 6 horas.
+Em caso de falha de conexão, o programa tenta novamente antes de exibir um aviso.
+Quando disponíveis, os últimos dados válidos da sessão são reaproveitados.
 """
     )
