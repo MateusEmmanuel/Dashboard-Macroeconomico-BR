@@ -1,3 +1,4 @@
+
 """Dashboard Macroeconômico do Brasil.
 
 Coleta séries oficiais do Banco Central (SGS) e do IBGE (SIDRA) e exibe os
@@ -48,7 +49,7 @@ TOLERANCIA = 1.5  # p.p.
 # Dados Banco Central
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def dados_bacen(codigo: int, anos: int) -> pd.DataFrame:
-    """Baixa uma série do SGS/BCB para os últimos `anos` (máx. 10 em séries diárias)."""
+    """Baixa uma série do SGS/BCB para os últimos `anos`."""
     hoje = date.today()
     inicio = hoje - timedelta(days=365 * anos)
     url = (
@@ -58,8 +59,10 @@ def dados_bacen(codigo: int, anos: int) -> pd.DataFrame:
     resposta = requests.get(url, timeout=TIMEOUT)
     resposta.raise_for_status()
     tabela = pd.DataFrame(resposta.json())
+
     if tabela.empty:
         raise ValueError(f"A série SGS {codigo} não retornou dados no período.")
+
     tabela["data"] = pd.to_datetime(tabela["data"], dayfirst=True)
     tabela["valor"] = pd.to_numeric(tabela["valor"], errors="coerce")
     return tabela.dropna(subset=["valor"]).reset_index(drop=True)
@@ -69,8 +72,8 @@ def dados_bacen(codigo: int, anos: int) -> pd.DataFrame:
 def _codigo_para_data(codigo: str, trimestral: bool) -> pd.Timestamp:
     """Converte o código de período do IBGE em data.
 
-    Mensal / trimestre móvel: AAAAMM (o mês é o do fim do período).
-    Trimestral: AAAAQQ, com QQ = 01..04 (e não o mês).
+    Mensal / trimestre móvel: AAAAMM.
+    Trimestral: AAAAQQ, com QQ = 01..04.
     """
     ano, resto = int(codigo[:4]), int(codigo[4:])
     mes = 3 * (resto - 1) + 1 if trimestral else resto
@@ -85,23 +88,31 @@ def dados_ibge(
     trimestral: bool = False,
     classificacao: str | None = None,
 ) -> pd.DataFrame:
-    """Baixa uma variável do SIDRA/IBGE para os últimos `n_periodos` disponíveis."""
+    """Baixa uma variável do SIDRA/IBGE para os últimos períodos disponíveis."""
     url = (
         f"https://servicodados.ibge.gov.br/api/v3/agregados/{tabela}"
         f"/periodos/-{n_periodos}/variaveis/{variavel}?localidades=N1[all]"
     )
+
     if classificacao:
         url += f"&classificacao={classificacao}"
+
     resposta = requests.get(url, timeout=TIMEOUT)
     resposta.raise_for_status()
     serie = resposta.json()[0]["resultados"][0]["series"][0]["serie"]
 
     tabela_df = pd.DataFrame(list(serie.items()), columns=["codigo", "valor"])
-    tabela_df["valor"] = pd.to_numeric(tabela_df["valor"], errors="coerce")  # "-" e "..." viram NaN
+    tabela_df["valor"] = pd.to_numeric(tabela_df["valor"], errors="coerce")
     tabela_df = tabela_df.dropna(subset=["valor"]).copy()
-    tabela_df["período"] = tabela_df["codigo"].map(lambda c: _codigo_para_data(c, trimestral))
+    tabela_df["período"] = tabela_df["codigo"].map(
+        lambda c: _codigo_para_data(c, trimestral)
+    )
+
     if trimestral:
-        tabela_df["rótulo"] = tabela_df["codigo"].map(lambda c: f"{int(c[4:])}T{c[2:4]}")
+        tabela_df["rótulo"] = tabela_df["codigo"].map(
+            lambda c: f"{int(c[4:])}T{c[2:4]}"
+        )
+
     return tabela_df.sort_values("período").reset_index(drop=True)
 
 
@@ -109,7 +120,7 @@ def carregar(nome: str, funcao, *args, **kwargs) -> pd.DataFrame | None:
     """Executa uma coleta e mostra um erro amigável na tela se ela falhar."""
     try:
         return funcao(*args, **kwargs)
-    except Exception as erro:  # noqa: BLE001 - queremos exibir qualquer falha ao usuário
+    except Exception as erro:  # noqa: BLE001
         st.error(f"Não foi possível carregar **{nome}**: {erro}")
         return None
 
@@ -117,13 +128,29 @@ def carregar(nome: str, funcao, *args, **kwargs) -> pd.DataFrame | None:
 # --------------------------------------------------------------------------- #
 # Transformações
 # --------------------------------------------------------------------------- #
-def juro_real_ex_post(selic_mensal: pd.DataFrame, ipca_12m: pd.DataFrame) -> pd.DataFrame:
-    """Juro real ex-post: Selic efetiva acumulada em 12 meses vs. IPCA acumulado em 12 meses."""
+def juro_real_ex_post(
+    selic_mensal: pd.DataFrame, ipca_12m: pd.DataFrame
+) -> pd.DataFrame:
+    """Calcula o juro real ex-post a partir da Selic efetiva e do IPCA em 12 meses."""
     fator_mensal = 1 + selic_mensal.set_index("data")["valor"] / 100
-    selic_12m = (fator_mensal.rolling(12).apply(lambda x: x.prod(), raw=True) - 1) * 100
+    selic_12m = (
+        fator_mensal.rolling(12).apply(lambda x: x.prod(), raw=True) - 1
+    ) * 100
+
     ipca = ipca_12m.set_index("período")["valor"]
-    base = pd.concat([selic_12m.rename("selic_12m"), ipca.rename("ipca_12m")], axis=1, join="inner").dropna()
-    base["juro_real"] = ((1 + base["selic_12m"] / 100) / (1 + base["ipca_12m"] / 100) - 1) * 100
+    base = pd.concat(
+        [
+            selic_12m.rename("selic_12m"),
+            ipca.rename("ipca_12m"),
+        ],
+        axis=1,
+        join="inner",
+    ).dropna()
+
+    base["juro_real"] = (
+        (1 + base["selic_12m"] / 100) / (1 + base["ipca_12m"] / 100) - 1
+    ) * 100
+
     base.index.name = "data"
     return base.reset_index()
 
@@ -131,31 +158,103 @@ def juro_real_ex_post(selic_mensal: pd.DataFrame, ipca_12m: pd.DataFrame) -> pd.
 # --------------------------------------------------------------------------- #
 # Gráficos e indicadores
 # --------------------------------------------------------------------------- #
-def estilo(fig, titulo_y: str):
+def estilo(
+    fig,
+    titulo_y: str,
+    formato_valor: str = ".2f",
+    prefixo: str = "",
+    sufixo: str = "",
+    formato_x: str | None = "%d %b %Y",
+):
+    """Aplica formatação numérica e estilo financeiro aos gráficos."""
     fig.update_layout(
         yaxis_title=titulo_y,
         xaxis_title=None,
         hovermode="x unified",
+        hoverlabel=dict(
+            bgcolor="#172235",
+            bordercolor="#34445c",
+            font=dict(
+                color="#F4F7FB",
+                size=13,
+                family="Arial, sans-serif",
+            ),
+            align="left",
+        ),
         margin=dict(l=10, r=10, t=50, b=10),
         legend_title_text="",
     )
+
+    fig.update_yaxes(tickformat=formato_valor)
+
+    if formato_x:
+        fig.update_xaxes(hoverformat=formato_x)
+
+    # O tooltip usa o valor formatado e não mostra a caixa extra da série.
+    fig.update_traces(
+        hovertemplate=(
+            f"<b>{prefixo}%{{y:{formato_valor}}}{sufixo}</b>"
+            "<extra></extra>"
+        )
+    )
+
     return fig
 
 
-def grafico_linha(df, x, y, titulo, titulo_y):
-    return estilo(px.line(df, x=x, y=y, title=titulo), titulo_y)
+def grafico_linha(
+    df,
+    x,
+    y,
+    titulo,
+    titulo_y,
+    formato_valor=".2f",
+    prefixo="",
+    sufixo="",
+    formato_x="%d %b %Y",
+):
+    """Cria um gráfico de linha com tooltip padronizado."""
+    fig = px.line(
+        df,
+        x=x,
+        y=y,
+        title=titulo,
+    )
+
+    # Mantém as linhas sem marcadores permanentes. O hover unificado e o
+    # tooltip personalizado facilitam a identificação da observação.
+    return estilo(
+        fig,
+        titulo_y,
+        formato_valor,
+        prefixo,
+        sufixo,
+        formato_x,
+    )
 
 
-def indicador(coluna, rotulo, df, sufixo_delta=""):
+def indicador(
+    coluna,
+    rotulo,
+    df,
+    sufixo_delta="",
+    formato=".2f",
+    prefixo="",
+    sufixo="",
+):
     """Mostra o último valor e a variação em relação à observação anterior."""
     if df is None or df.empty:
         coluna.metric(rotulo, "—")
         return
+
     ultimo = df["valor"].iloc[-1]
     delta = None
+
     if len(df) > 1:
-        delta = f"{ultimo - df['valor'].iloc[-2]:+.2f}{sufixo_delta}"
-    coluna.metric(rotulo, f"{ultimo:.2f}", delta)
+        variacao = ultimo - df["valor"].iloc[-2]
+        delta = f"{variacao:+.2f}{sufixo_delta}"
+
+    valor_formatado = format(ultimo, formato)
+    coluna.metric(rotulo, f"{prefixo}{valor_formatado}{sufixo}", delta)
 
 
 # --------------------------------------------------------------------------- #
@@ -163,24 +262,50 @@ def indicador(coluna, rotulo, df, sufixo_delta=""):
 # --------------------------------------------------------------------------- #
 st.title("📊 Dashboard Macroeconômico do Brasil")
 st.caption(
-    "Indicadores de atividade, inflação, política monetária, câmbio e mercado de trabalho, "
-    "com dados do Banco Central (SGS) e do IBGE (SIDRA) atualizados automaticamente."
+    "Indicadores de atividade, inflação, política monetária, câmbio e mercado "
+    "de trabalho, com dados do Banco Central (SGS) e do IBGE (SIDRA) "
+    "atualizados automaticamente."
 )
 
 with st.sidebar:
     st.header("Configurações")
     anos = st.slider("Histórico (anos)", min_value=1, max_value=10, value=5)
+
     if st.button("🔄 Atualizar dados agora"):
         st.cache_data.clear()
         st.rerun()
+
     st.caption(f"Consulta feita em {date.today():%d/%m/%Y}. Cache de 6 horas.")
 
+
+# --------------------------------------------------------------------------- #
 # Coleta
+# --------------------------------------------------------------------------- #
 selic = carregar("Selic", dados_bacen, SGS_SELIC_META, anos)
 dolar = carregar("Dólar", dados_bacen, SGS_DOLAR, anos)
-selic_mensal = carregar("Selic efetiva (acumulada no mês)", dados_bacen, SGS_SELIC_MENSAL, anos + 1)
-ipca_12m = carregar("IPCA em 12 meses", dados_ibge, SIDRA_IPCA, SIDRA_IPCA_12M, anos * 12)
-ipca_mensal = carregar("IPCA mensal", dados_ibge, SIDRA_IPCA, SIDRA_IPCA_MENSAL, anos * 12)
+selic_mensal = carregar(
+    "Selic efetiva (acumulada no mês)",
+    dados_bacen,
+    SGS_SELIC_MENSAL,
+    anos + 1,
+)
+
+ipca_12m = carregar(
+    "IPCA em 12 meses",
+    dados_ibge,
+    SIDRA_IPCA,
+    SIDRA_IPCA_12M,
+    anos * 12,
+)
+
+ipca_mensal = carregar(
+    "IPCA mensal",
+    dados_ibge,
+    SIDRA_IPCA,
+    SIDRA_IPCA_MENSAL,
+    anos * 12,
+)
+
 pib_var = carregar(
     "PIB (variação anual)",
     dados_ibge,
@@ -190,6 +315,7 @@ pib_var = carregar(
     trimestral=True,
     classificacao=SIDRA_PIB_CLASSIF,
 )
+
 pib_nominal = carregar(
     "PIB (valores correntes)",
     dados_ibge,
@@ -198,30 +324,92 @@ pib_nominal = carregar(
     anos * 4,
     trimestral=True,
 )
+
 desemprego = carregar(
-    "Taxa de desocupação", dados_ibge, SIDRA_DESEMPREGO, SIDRA_DESEMPREGO_VAR, anos * 12
+    "Taxa de desocupação",
+    dados_ibge,
+    SIDRA_DESEMPREGO,
+    SIDRA_DESEMPREGO_VAR,
+    anos * 12,
 )
 
+
+# --------------------------------------------------------------------------- #
 # Indicadores principais
+# --------------------------------------------------------------------------- #
 col1, col2, col3, col4, col5 = st.columns(5)
-indicador(col1, "Selic meta (% a.a.)", selic, " p.p.")
-indicador(col2, "Dólar (R$)", dolar)
-indicador(col3, "IPCA 12m (%)", ipca_12m, " p.p.")
-indicador(col4, "PIB a/a (%)", pib_var, " p.p.")
-indicador(col5, "Desocupação (%)", desemprego, " p.p.")
+
+indicador(
+    col1,
+    "Taxa Selic Meta",
+    selic,
+    " p.p.",
+    formato=".2f",
+    sufixo="%",
+)
+
+indicador(
+    col2,
+    "Dólar",
+    dolar,
+    formato=".2f",
+    prefixo="R$ ",
+)
+
+indicador(
+    col3,
+    "IPCA (12 meses)",
+    ipca_12m,
+    " p.p.",
+    formato=".2f",
+    sufixo="%",
+)
+
+indicador(
+    col4,
+    "PIB (Var. Anual)",
+    pib_var,
+    " p.p.",
+    formato=".2f",
+    sufixo="%",
+)
+
+indicador(
+    col5,
+    "Taxa de Desocupação",
+    desemprego,
+    " p.p.",
+    formato=".2f",
+    sufixo="%",
+)
+
 
 aba_monetaria, aba_inflacao, aba_atividade = st.tabs(
     ["Juros e câmbio", "Inflação", "Atividade e emprego"]
 )
 
+
+# --------------------------------------------------------------------------- #
+# Aba: Juros e câmbio
+# --------------------------------------------------------------------------- #
 with aba_monetaria:
     if selic is not None:
         st.plotly_chart(
-            grafico_linha(selic, "data", "valor", "Taxa Selic - meta (% a.a.)", "% a.a."),
+            grafico_linha(
+                selic,
+                "data",
+                "valor",
+                "Taxa Selic - meta (% a.a.)",
+                "% a.a.",
+                ".2f",
+                sufixo="%",
+            ),
             width="stretch",
         )
+
     if selic_mensal is not None and ipca_12m is not None:
         juro = juro_real_ex_post(selic_mensal, ipca_12m)
+
         if not juro.empty:
             st.plotly_chart(
                 grafico_linha(
@@ -230,38 +418,87 @@ with aba_monetaria:
                     "juro_real",
                     "Juro real ex-post (Selic efetiva 12m vs. IPCA 12m, % a.a.)",
                     "% a.a.",
+                    ".2f",
+                    sufixo="%",
                 ),
                 width="stretch",
             )
+
             st.caption(
-                "Aproximação: (1 + Selic efetiva acumulada em 12 meses) / (1 + IPCA acumulado em 12 meses) - 1."
+                "Aproximação: (1 + Selic efetiva acumulada em 12 meses) / "
+                "(1 + IPCA acumulado em 12 meses) - 1."
             )
+
     if dolar is not None:
         st.plotly_chart(
-            grafico_linha(dolar, "data", "valor", "Dólar comercial (R$/US$)", "R$"),
+            grafico_linha(
+                dolar,
+                "data",
+                "valor",
+                "Dólar comercial (R$/US$)",
+                "R$",
+                ",.2f",
+                prefixo="R$ ",
+            ),
             width="stretch",
         )
 
+
+# --------------------------------------------------------------------------- #
+# Aba: Inflação
+# --------------------------------------------------------------------------- #
 with aba_inflacao:
     if ipca_12m is not None:
         fig = grafico_linha(
-            ipca_12m, "período", "valor", "IPCA acumulado em 12 meses (%)", "% em 12 meses"
+            ipca_12m,
+            "período",
+            "valor",
+            "IPCA acumulado em 12 meses (%)",
+            "% em 12 meses",
+            ".2f",
+            sufixo="%",
         )
-        fig.add_hline(y=META_INFLACAO, line_dash="dash", annotation_text="Meta atual: 3%")
+
+        fig.add_hline(
+            y=META_INFLACAO,
+            line_dash="dash",
+            annotation_text="Meta atual: 3%",
+        )
+
         fig.add_hrect(
-            y0=META_INFLACAO - TOLERANCIA, y1=META_INFLACAO + TOLERANCIA, opacity=0.1, line_width=0
+            y0=META_INFLACAO - TOLERANCIA,
+            y1=META_INFLACAO + TOLERANCIA,
+            opacity=0.1,
+            line_width=0,
         )
-        st.plotly_chart(fig, width="stretch")
-        st.caption(
-            "Faixa sombreada: tolerância de ±1,5 p.p. em torno da meta contínua de 3% vigente. "
-            "Para períodos anteriores a 2025, as metas eram definidas ano a ano."
-        )
-    if ipca_mensal is not None:
-        fig = estilo(
-            px.bar(ipca_mensal, x="período", y="valor", title="IPCA - variação mensal (%)"), "% no mês"
-        )
+
         st.plotly_chart(fig, width="stretch")
 
+        st.caption(
+            "Faixa sombreada: tolerância de ±1,5 p.p. em torno da meta contínua "
+            "de 3% vigente. Para períodos anteriores a 2025, as metas eram "
+            "definidas ano a ano."
+        )
+
+    if ipca_mensal is not None:
+        fig = estilo(
+            px.bar(
+                ipca_mensal,
+                x="período",
+                y="valor",
+                title="IPCA - variação mensal (%)",
+            ),
+            "% no mês",
+            ".2f",
+            sufixo="%",
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
+
+# --------------------------------------------------------------------------- #
+# Aba: Atividade e emprego
+# --------------------------------------------------------------------------- #
 with aba_atividade:
     if pib_var is not None:
         fig = estilo(
@@ -269,12 +506,20 @@ with aba_atividade:
                 pib_var,
                 x="rótulo",
                 y="valor",
-                title="PIB - variação em relação ao mesmo trimestre do ano anterior (%)",
+                title=(
+                    "PIB - variação em relação ao mesmo trimestre "
+                    "do ano anterior (%)"
+                ),
             ),
             "% a/a",
+            ".2f",
+            sufixo="%",
+            formato_x=None,
         )
+
         fig.update_xaxes(type="category")
         st.plotly_chart(fig, width="stretch")
+
     if desemprego is not None:
         st.plotly_chart(
             grafico_linha(
@@ -283,27 +528,45 @@ with aba_atividade:
                 "valor",
                 "Taxa de desocupação - PNAD Contínua (trimestre móvel, %)",
                 "%",
+                ".2f",
+                sufixo="%",
             ),
             width="stretch",
         )
+
     if pib_nominal is not None:
         with st.expander("PIB em valores correntes (R$ milhões)"):
             fig = estilo(
-                px.bar(pib_nominal, x="rótulo", y="valor", title="PIB trimestral a preços correntes"),
+                px.bar(
+                    pib_nominal,
+                    x="rótulo",
+                    y="valor",
+                    title="PIB trimestral a preços correntes",
+                ),
                 "R$ milhões",
-            )
-            fig.update_xaxes(type="category")
-            st.plotly_chart(fig, width="stretch")
-            st.caption(
-                "A frequência trimestral captura mudanças conjunturais e pontos de virada "
-                "na atividade com maior agilidade em relação aos dados anuais consolidados."    
+                ",.0f",
+                sufixo=" milhões de R$",
+                formato_x=None,
             )
 
+            fig.update_xaxes(type="category")
+            st.plotly_chart(fig, width="stretch")
+
+            st.caption(
+                "A frequência trimestral captura mudanças conjunturais e pontos "
+                "de virada na atividade com maior agilidade em relação aos dados "
+                "anuais consolidados."
+            )
+
+
+# --------------------------------------------------------------------------- #
+# Fontes e metodologia
+# --------------------------------------------------------------------------- #
 with st.expander("Fontes e metodologia"):
     st.markdown(
         f"""
 - **Selic meta** - BCB/SGS, série {SGS_SELIC_META}
-- **Selic efetiva acumulada no mês** (base do juro real) - BCB/SGS, série {SGS_SELIC_MENSAL} 
+- **Selic efetiva acumulada no mês** (base do juro real) - BCB/SGS, série {SGS_SELIC_MENSAL}
 - **Dólar comercial (venda)** - BCB/SGS, série {SGS_DOLAR}
 - **IPCA** - IBGE/SIDRA, tabela {SIDRA_IPCA} (variáveis {SIDRA_IPCA_MENSAL} e {SIDRA_IPCA_12M})
 - **PIB (variação em volume, trimestre / mesmo trimestre do ano anterior)** - IBGE/SIDRA,
