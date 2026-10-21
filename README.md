@@ -22,6 +22,7 @@ Também há indicadores resumidos no topo (último valor e variação em relaç�
 | Indicador | API | Código |
 |---|---|---|
 | Selic meta (% a.a.) | BCB/SGS | série 432 |
+| Selic efetiva acumulada no mês | BCB/SGS | série 4390 |
 | Dólar comercial (venda) | BCB/SGS | série 1 |
 | IPCA (mensal e 12 meses) | IBGE/SIDRA | tabela 1737, variáveis 63 e 2265 |
 | PIB, variação em volume (trimestre / mesmo trimestre do ano anterior) | IBGE/SIDRA | tabela 5932, variável 6564 |
