@@ -303,8 +303,8 @@ with st.expander("Fontes e metodologia"):
     st.markdown(
         f"""
 - **Selic meta** - BCB/SGS, série {SGS_SELIC_META}
+- **Selic efetiva acumulada no mês** (base do juro real) - BCB/SGS, série {SGS_SELIC_MENSAL} 
 - **Dólar comercial (venda)** - BCB/SGS, série {SGS_DOLAR}
-- **Selic efetiva acumulada no mês** (base do juro real) - BCB/SGS, série {SGS_SELIC_MENSAL}
 - **IPCA** - IBGE/SIDRA, tabela {SIDRA_IPCA} (variáveis {SIDRA_IPCA_MENSAL} e {SIDRA_IPCA_12M})
 - **PIB (variação em volume, trimestre / mesmo trimestre do ano anterior)** - IBGE/SIDRA,
   tabela {SIDRA_PIB_VAR}, variável {SIDRA_PIB_VAR_ANUAL}
