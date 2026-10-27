@@ -19,8 +19,8 @@ import requests
 
 PASTA_DADOS = Path(__file__).parent / "dados"
 HEADERS = {"User-Agent": "dashboard-macro-br (github.com/MateusEmmanuel/Dashboard-Macroeconomico-BR)"}
-TIMEOUT = (10, 120)  # (conexão, leitura) em segundos
-TENTATIVAS = 4
+TIMEOUT = (30, 120)  # (conexão, leitura) em segundos
+TENTATIVAS = 5
 JANELA_DIAS = 730  # o BCB responde melhor a consultas de ~2 anos por vez
 
 # BCB: série -> anos de histórico (séries diárias aceitam no máximo 10 anos)
