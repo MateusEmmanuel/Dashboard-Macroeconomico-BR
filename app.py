@@ -2,8 +2,8 @@
 
 Exibe os principais indicadores de acompanhamento do cenário macro em um painel
 Streamlit. Os dados oficiais do Banco Central (SGS) e do IBGE (SIDRA) são baixados
-uma vez por dia pelo script `atualizar_dados.py` (executado pelo GitHub Actions) e
-salvos em `dados/bcb.json` e `dados/ibge.json`. O painel abre a partir desses arquivos
+pelo script `atualizar_dados.py` (BCB: automático todo dia, via GitHub Actions; IBGE:
+atualizado a cada divulgação) e salvos em `dados/bcb.json` e `dados/ibge.json`. O painel abre a partir desses arquivos
 (rápido e sem depender das APIs) e o botão "Atualizar agora" consulta as APIs na hora,
 buscando apenas os dados mais recentes e mesclando com os salvos.
 
@@ -49,7 +49,7 @@ SIDRA_IPCA = 1737  # IPCA - série histórica
 SIDRA_IPCA_MENSAL = 63  # variável: variação mensal (%)
 SIDRA_IPCA_12M = 2265  # variável: variação acumulada em 12 meses (%)
 SIDRA_PIB_VAR = 5932  # PIB - taxa de variação do índice de volume trimestral
-SIDRA_PIB_VAR_ANUAL = 6564  # variável: trimestre / mesmo trimestre do ano anterior (%)
+SIDRA_PIB_VAR_ANUAL = 6564  # variável: taxa trimestre contra trimestre imediatamente anterior (%)
 SIDRA_PIB_NOMINAL = 2072  # PIB - valores correntes
 SIDRA_PIB_NOMINAL_VAR = 933  # variável: valores a preços correntes (R$ milhões)
 SIDRA_DESEMPREGO = 6381  # PNAD Contínua - taxa de desocupação (trimestre móvel)
@@ -67,7 +67,7 @@ ATUALIZAR_BCB = [
 ATUALIZAR_IBGE = [  # (nome, tabela, variável, classificação)
     ("IPCA 12 meses", SIDRA_IPCA, SIDRA_IPCA_12M, None),
     ("IPCA mensal", SIDRA_IPCA, SIDRA_IPCA_MENSAL, None),
-    ("PIB (variação)", SIDRA_PIB_VAR, SIDRA_PIB_VAR_ANUAL, "11255[90707]"),
+    ("PIB (var. trimestral)", SIDRA_PIB_VAR, SIDRA_PIB_VAR_ANUAL, "11255[90707]"),
     ("PIB (valores correntes)", SIDRA_PIB_NOMINAL, SIDRA_PIB_NOMINAL_VAR, None),
     ("Desocupação", SIDRA_DESEMPREGO, SIDRA_DESEMPREGO_VAR, None),
 ]
@@ -561,15 +561,15 @@ with st.sidebar:
     if ao_vivo.get("momento"):
         st.caption(f"✅ Atualizado ao vivo em {ao_vivo['momento']:%d/%m/%Y às %H:%M}.")
 
-    if ao_vivo.get("erros"):
+    if ao_vivo.get("erros") and not ao_vivo.get("momento"):
+        # Aviso só quando nada pôde ser atualizado (ex.: BCB e IBGE fora do ar).
         st.warning(
-            "Não foi possível atualizar agora: "
-            + ", ".join(ao_vivo["erros"])
-            + ". Esses indicadores seguem com os dados salvos."
+            "Não foi possível atualizar agora. "
+            "Os indicadores seguem com os dados salvos."
         )
 
     st.caption(
-        f"Dados salvos (atualização automática diária, horário de Brasília): "
+        f"Dados salvos (horário de Brasília; BCB atualizado diariamente, IBGE a cada divulgação): "
         f"BCB em {data_atualizacao(ARQ_BCB)}; IBGE em {data_atualizacao(ARQ_IBGE)}."
     )
 
@@ -605,7 +605,7 @@ ipca_mensal = carregar(
 )
 
 pib_var = carregar(
-    "PIB (variação anual)",
+    "PIB (variação trimestral)",
     dados_ibge,
     SIDRA_PIB_VAR,
     SIDRA_PIB_VAR_ANUAL,
@@ -674,12 +674,13 @@ indicador(
 
 indicador(
     col4,
-    "PIB (Var. Anual)",
+    "PIB (Var. Trimestral)",
     pib_var,
     " p.p.",
     formato=".2f",
     sufixo="%",
     periodo=rotulo_periodo(pib_var, "trimestre"),
+    ajuda="Variação do PIB em relação ao trimestre imediatamente anterior, conforme divulgado pelo IBGE (Contas Nacionais Trimestrais).",
 )
 
 indicador(
@@ -827,11 +828,11 @@ with aba_atividade:
                 x="rótulo",
                 y="valor",
                 title=(
-                    "PIB - variação em relação ao mesmo trimestre "
-                    "do ano anterior (%)"
+                    "PIB - variação em relação ao trimestre "
+                    "imediatamente anterior (%)"
                 ),
             ),
-            "% a/a",
+            "% no trimestre",
             ".2f",
             sufixo="%",
             formato_x=None,
@@ -891,15 +892,16 @@ with st.expander("Fontes e metodologia"):
 - **Selic efetiva acumulada no mês** (base do juro real) - BCB/SGS, série {SGS_SELIC_MENSAL}
 - **Dólar comercial (venda), fechamento diário** - BCB/SGS, série {SGS_DOLAR}
 - **IPCA** - IBGE/SIDRA, tabela {SIDRA_IPCA} (variáveis {SIDRA_IPCA_MENSAL} e {SIDRA_IPCA_12M})
-- **PIB (variação em volume, trimestre / mesmo trimestre do ano anterior)** - IBGE/SIDRA,
+- **PIB (variação em volume, trimestre contra trimestre imediatamente anterior)** - IBGE/SIDRA,
   tabela {SIDRA_PIB_VAR}, variável {SIDRA_PIB_VAR_ANUAL}
 - **PIB a preços correntes** - IBGE/SIDRA, tabela {SIDRA_PIB_NOMINAL}, variável {SIDRA_PIB_NOMINAL_VAR}
 - **Taxa de desocupação** - IBGE/SIDRA (PNAD Contínua, trimestre móvel), tabela {SIDRA_DESEMPREGO},
   variável {SIDRA_DESEMPREGO_VAR}
 
-**Atualização dos dados:** uma rotina automática (GitHub Actions) baixa as séries das
-APIs oficiais do BCB e do IBGE uma vez por dia e salva o resultado no repositório; o
-painel abre a partir desses arquivos, o que o torna rápido e estável. O botão
+**Atualização dos dados:** uma rotina automática (GitHub Actions) baixa as séries do BCB
+todo dia, e as séries do IBGE são atualizadas a cada nova divulgação (IPCA, PNAD e PIB são
+mensais ou trimestrais); o resultado é salvo no repositório e o painel abre a partir desses
+arquivos, o que o torna rápido e estável. O botão
 "Atualizar agora" consulta as APIs na hora, busca apenas os períodos mais recentes e os
 junta aos dados salvos (a atualização vale para a sua sessão). Se uma API estiver
 lenta ou fora do ar, o indicador correspondente continua com os dados salvos.
@@ -908,7 +910,7 @@ lenta ou fora do ar, o indicador correspondente continua com os dados salvos.
 BCB, e não a cotação em tempo real do mercado, que varia ao longo do dia.
 
 **Desocupação:** a PNAD Contínua é divulgada em trimestres móveis (média dos 3 meses até o
-mês indicado em "Ref."), que se atualizam todo mês e podem diferir do dado do trimestre
+mês mais recente, como "tri. até ago/26"), que se atualizam todo mês e podem diferir do dado do trimestre
 fechado (ex.: abril-junho) citado em outras páginas do IBGE.
 """
     )

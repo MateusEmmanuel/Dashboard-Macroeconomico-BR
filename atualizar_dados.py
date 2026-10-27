@@ -3,7 +3,8 @@
 Executado uma vez por dia pelo GitHub Actions (.github/workflows/atualizar-dados.yml)
 e também pode ser rodado localmente:
 
-    python atualizar_dados.py
+    python atualizar_dados.py            # BCB + IBGE (no seu computador)
+    python atualizar_dados.py --so-bcb   # só BCB (GitHub Actions)
 
 O painel (app.py) lê os arquivos gerados aqui, em vez de consultar as APIs a cada acesso.
 Se uma das fontes falhar, o arquivo anterior dela é mantido e o script termina com erro.
@@ -19,8 +20,8 @@ import requests
 
 PASTA_DADOS = Path(__file__).parent / "dados"
 HEADERS = {"User-Agent": "dashboard-macro-br (github.com/MateusEmmanuel/Dashboard-Macroeconomico-BR)"}
-TIMEOUT = (30, 120)  # (conexão, leitura) em segundos
-TENTATIVAS = 5
+TIMEOUT = (10, 120)  # (conexão, leitura) em segundos
+TENTATIVAS = 4
 JANELA_DIAS = 730  # o BCB responde melhor a consultas de ~2 anos por vez
 
 # BCB: série -> anos de histórico (séries diárias aceitam no máximo 10 anos)
@@ -34,7 +35,7 @@ SERIES_BCB = {
 SERIES_IBGE = [
     (1737, 2265, 120, None),  # IPCA - variação em 12 meses
     (1737, 63, 120, None),  # IPCA - variação mensal
-    (5932, 6564, 40, "11255[90707]"),  # PIB - variação trimestre/mesmo trimestre do ano anterior
+    (5932, 6564, 40, "11255[90707]"),  # PIB - variação trimestre contra trimestre imediatamente anterior
     (2072, 933, 40, None),  # PIB - valores correntes (R$ milhões)
     (6381, 4099, 120, None),  # PNAD Contínua - taxa de desocupação
 ]
@@ -143,8 +144,13 @@ def salvar(nome: str, series: dict) -> None:
 
 
 def main() -> int:
+    # --so-bcb: usado pelo GitHub Actions, porque o IBGE não responde a partir dos
+    # servidores do GitHub. O IBGE é atualizado rodando este script no seu computador.
+    so_bcb = "--so-bcb" in sys.argv
+    fontes = (("bcb", coletar_bcb),) if so_bcb else (("ibge", coletar_ibge), ("bcb", coletar_bcb))
+
     falhas = []
-    for nome, coletar in (("ibge", coletar_ibge), ("bcb", coletar_bcb)):
+    for nome, coletar in fontes:
         try:
             salvar(nome, coletar())
             print(f"{nome}: OK")
