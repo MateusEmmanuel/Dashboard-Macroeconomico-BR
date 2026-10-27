@@ -1,0 +1,38 @@
+name: Atualizar dados (BCB e IBGE)
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # todo dia, 6h no horário de Brasília
+  workflow_dispatch: # permite rodar manualmente na aba Actions
+
+permissions:
+  contents: write
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install requests
+
+      - name: Baixar dados
+        run: python atualizar_dados.py
+
+      # Roda mesmo se uma das fontes falhar, para salvar a que deu certo.
+      - name: Salvar no repositório
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          if [ -d dados ]; then git add dados; fi
+          if ! git diff --cached --quiet; then
+            git commit -m "Atualiza dados (BCB e IBGE)"
+            git push
+          fi
