@@ -783,20 +783,11 @@ with aba_inflacao:
             annotation_text="Meta atual: 3%",
         )
 
-        fig.add_hrect(
-            y0=META_INFLACAO - TOLERANCIA,
-            y1=META_INFLACAO + TOLERANCIA,
-            fillcolor="#7FB3FF",
-            opacity=0.18,
-            line_width=0,
-        )
-
         st.plotly_chart(fig, width="stretch")
 
         st.caption(
-            "Faixa sombreada: tolerância de ±1,5 p.p. em torno da meta contínua "
-            "de 3% vigente. Para períodos anteriores a 2025, as metas eram "
-            "definidas ano a ano."
+            "Linha tracejada: meta contínua de 3% vigente (tolerância de ±1,5 p.p.). "
+            "Para períodos anteriores a 2025, as metas eram definidas ano a ano."
         )
 
     if ipca_mensal is not None:
